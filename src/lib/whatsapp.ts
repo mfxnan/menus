@@ -8,11 +8,18 @@ export function normalizeWhatsAppNumber(value: string): string {
   return digits
 }
 
+export function isValidWhatsAppNumber(value: string): boolean {
+  return /^62\d{8,13}$/.test(normalizeWhatsAppNumber(value))
+}
+
 export function buildWhatsAppMessage(
   store: StoreSettings,
   details: CheckoutDetails,
   items: Array<{ product: Product; quantity: number }>,
 ): string {
+  const availableItems = items.filter(({ product }) =>
+    product.is_available && product.is_published && !product.archived_at,
+  )
   const lines = [
     `Halo ${store.store_name} - ${store.branch_name}, saya ingin memesan:`,
     '',
@@ -22,14 +29,14 @@ export function buildWhatsAppMessage(
     ...(details.orderType === 'delivery' && details.address.trim() ? [`Alamat: ${details.address.trim()}`] : []),
     '',
     'Pesanan:',
-    ...items.map(({ product, quantity }) =>
+    ...availableItems.map(({ product, quantity }) =>
       `- ${product.name} x${quantity} @ ${formatIDR(product.price)} = ${formatIDR(product.price * quantity)}`,
     ),
-    `Subtotal: ${formatIDR(items.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}`,
+    `Subtotal: ${formatIDR(availableItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}`,
     ...(details.orderType === 'delivery' && store.delivery_fee > 0
       ? [`Biaya antar: ${formatIDR(store.delivery_fee)}`]
       : []),
-    `Total: ${formatIDR(items.reduce((sum, item) => sum + item.product.price * item.quantity, 0) + (details.orderType === 'delivery' ? store.delivery_fee : 0))}`,
+    `Total: ${formatIDR(availableItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0) + (details.orderType === 'delivery' ? store.delivery_fee : 0))}`,
     ...(details.notes.trim() ? ['', `Catatan: ${details.notes.trim()}`] : []),
     '',
     'Saya akan mengirim pesanan ini setelah menekan tombol Kirim di WhatsApp.',
@@ -39,6 +46,6 @@ export function buildWhatsAppMessage(
 
 export function buildWhatsAppUrl(number: string, message: string): string {
   const normalized = normalizeWhatsAppNumber(number)
-  if (!/^62\d{8,13}$/.test(normalized)) throw new Error('Nomor WhatsApp toko belum dikonfigurasi dengan format internasional yang valid.')
+  if (!isValidWhatsAppNumber(number)) throw new Error('Nomor WhatsApp toko belum dikonfigurasi dengan format internasional yang valid.')
   return `https://wa.me/${normalized}?text=${encodeURIComponent(message)}`
 }

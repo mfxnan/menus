@@ -3,9 +3,9 @@ import type { FormEvent } from 'react'
 import { Link, Navigate, Route, Routes } from 'react-router-dom'
 import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, ImagePlus, LogOut, Package, Plus, Settings2, Tags, X } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
-import { archiveCategory, archiveProduct, bulkCategories, bulkProducts, getAdminData, productImageUrl, saveCategory, saveProduct, saveSettings, uploadProductImage } from './lib/data'
+import { archiveCategory, archiveProduct, bulkCategories, bulkProducts, getAdminData, productImageUrl, removeProductImage, saveCategory, saveProduct, saveSettings, uploadProductImage } from './lib/data'
 import { supabase } from './lib/supabase'
-import { normalizeWhatsAppNumber } from './lib/whatsapp'
+import { isValidWhatsAppNumber, normalizeWhatsAppNumber } from './lib/whatsapp'
 import { validateCategory, validateProduct } from './lib/validation'
 import { formatIDR } from './lib/money'
 import type { Category, Product, StoreSettings } from './types'
@@ -39,7 +39,15 @@ export function Admin() {
       setAuthLoading(Boolean(result.session))
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (active) { setSession(nextSession); setAuthError('') }
+      if (active) {
+        setSession(nextSession)
+        setAuthError('')
+        setAuthLoading(Boolean(nextSession))
+        if (!nextSession) {
+          setAdmin(false)
+          setData(null)
+        }
+      }
     })
     return () => { active = false; listener.subscription.unsubscribe() }
   }, [])
@@ -158,9 +166,9 @@ function ProductsPage({ data, setData, reload, setNotice }: { data: AdminData; s
     if (!window.confirm(`${actionLabel} ${ids.length} produk terpilih?`)) return
     setBusy(true)
     try {
-      await bulkProducts(ids, action)
+      const cleanupWarning = await bulkProducts(ids, action)
       setSelectedIds(new Set())
-      setNotice({ kind: 'success', text: `${ids.length} produk berhasil ${action === 'delete' ? 'dihapus' : action === 'archive' ? 'diarsipkan' : 'dinonaktifkan'}.` })
+      setNotice({ kind: 'success', text: `${ids.length} produk berhasil ${action === 'delete' ? 'dihapus' : action === 'archive' ? 'diarsipkan' : 'dinonaktifkan'}.${cleanupWarning ? ` ${cleanupWarning}` : ''}` })
       await reload()
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Aksi batch produk gagal.' })
@@ -172,13 +180,17 @@ function ProductsPage({ data, setData, reload, setNotice }: { data: AdminData; s
     catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Produk gagal diarsipkan.' }) }
   }
   const toggle = async (product: Product, field: 'is_available' | 'is_published') => {
-    try { await saveProduct({ ...product, [field]: !product[field] }); update({ ...product, [field]: !product[field] }); setNotice({ kind: 'success', text: 'Status produk diperbarui.' }) }
+    try {
+      const result = await saveProduct({ ...product, [field]: !product[field] })
+      update(result.product)
+      setNotice({ kind: 'success', text: `Status produk diperbarui.${result.warning ? ` ${result.warning}` : ''}` })
+    }
     catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Status gagal diperbarui.' }) }
   }
   return <section className="admin-content"><div className="admin-page-heading"><div><h2>Produk</h2><p>{data.products.length} produk dalam katalog.</p></div><button className="primary-button" onClick={() => setEditing('new')}><Plus size={17} /> Tambah produk</button></div><div className="admin-toolbar"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Cari produk..." aria-label="Cari produk" /></div>
     <BulkActions selectedCount={selectedIds.size} visibleCount={filtered.length} allVisibleSelected={allVisibleSelected} busy={busy} onSelectAll={() => setSelectedIds((current) => new Set([...current, ...visibleIds]))} onClear={() => setSelectedIds(new Set())} onAction={(action) => void runBulkAction(action)} />
-    <div className="product-admin-list">{filtered.map((product) => <article className={product.archived_at ? 'product-admin-row archived' : 'product-admin-row'} key={product.id}><div className="admin-product-image">{product.image_path ? <img src={productImageUrl(product.image_path) ?? undefined} alt="" /> : <ImagePlus />}</div><div className="admin-product-info"><strong>{product.name}</strong><span>{data.categories.find((category) => category.id === product.category_id)?.name ?? 'Kategori tidak ditemukan'}</span></div><strong className="admin-product-price">{formatIDR(product.price)}</strong><span className={product.is_available ? 'status-pill available' : 'status-pill unavailable'}>{product.is_available ? 'Tersedia' : 'Habis'}</span><div className="row-actions"><label className="bulk-row-select"><input type="checkbox" checked={selectedIds.has(product.id)} onChange={() => toggleSelected(product.id)} disabled={busy} aria-label={`Pilih ${product.name}`} /> Pilih</label><button className="secondary-button compact" onClick={() => setEditing(product)}>Edit</button><button className="secondary-button compact" onClick={() => void toggle(product, 'is_available')}>{product.is_available ? 'Tandai habis' : 'Tersedia'}</button><button className="secondary-button compact" onClick={() => void toggle(product, 'is_published')}>{product.is_published ? 'Unpublish' : 'Publish'}</button>{!product.archived_at && <button className="icon-button danger-text" onClick={() => void archive(product)} aria-label={`Arsipkan ${product.name}`}><X size={17} /></button>}</div></article>)}{!filtered.length && <div className="state-card">Tidak ada produk yang cocok.</div>}</div>
-    {editing !== null && <ProductEditor product={editing === 'new' ? null : editing} categories={data.categories.filter((category) => !category.archived_at)} busy={busy} setBusy={setBusy} onClose={() => setEditing(null)} onSave={async (product) => { try { await saveProduct(product); setNotice({ kind: 'success', text: product.id ? 'Produk berhasil diperbarui.' : 'Produk berhasil ditambahkan.' }); setEditing(null); await reload() } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Produk gagal disimpan.' }) } }} />}
+    <div className="product-admin-list">{filtered.map((product) => <article className={product.archived_at ? 'product-admin-row archived' : 'product-admin-row'} key={product.id}><AdminProductImage product={product} /><div className="admin-product-info"><strong>{product.name}</strong><span>{data.categories.find((category) => category.id === product.category_id)?.name ?? 'Kategori tidak ditemukan'}</span></div><strong className="admin-product-price">{formatIDR(product.price)}</strong><span className={product.is_available ? 'status-pill available' : 'status-pill unavailable'}>{product.is_available ? 'Tersedia' : 'Habis'}</span><div className="row-actions"><label className="bulk-row-select"><input type="checkbox" checked={selectedIds.has(product.id)} onChange={() => toggleSelected(product.id)} disabled={busy} aria-label={`Pilih ${product.name}`} /> Pilih</label><button className="secondary-button compact" onClick={() => setEditing(product)}>Edit</button><button className="secondary-button compact" onClick={() => void toggle(product, 'is_available')}>{product.is_available ? 'Tandai habis' : 'Tersedia'}</button><button className="secondary-button compact" onClick={() => void toggle(product, 'is_published')}>{product.is_published ? 'Unpublish' : 'Publish'}</button>{!product.archived_at && <button className="icon-button danger-text" onClick={() => void archive(product)} aria-label={`Arsipkan ${product.name}`}><X size={17} /></button>}</div></article>)}{!filtered.length && <div className="state-card">Tidak ada produk yang cocok.</div>}</div>
+    {editing !== null && <ProductEditor product={editing === 'new' ? null : editing} categories={data.categories.filter((category) => !category.archived_at)} busy={busy} setBusy={setBusy} onClose={() => setEditing(null)} onSave={async (product) => { const result = await saveProduct(product); setNotice({ kind: 'success', text: `${product.id ? 'Produk berhasil diperbarui.' : 'Produk berhasil ditambahkan.'}${result.warning ? ` ${result.warning}` : ''}` }); setEditing(null); await reload() }} />}
   </section>
 }
 
@@ -201,13 +213,32 @@ function ProductEditor({ product, categories, busy, setBusy, onClose, onSave }: 
     if (validationError) { setError(validationError); return }
     if (!Number.isSafeInteger(Number(order))) { setError('Urutan tampil harus berupa bilangan bulat.'); return }
     setBusy(true); setError('')
+    let uploaded: string | null = null
     try {
-      const uploaded = imageFile ? await uploadProductImage(imageFile) : imagePath
-      await onSave({ ...(product ? { id: product.id } : {}), name: name.trim(), description: description.trim(), price: numericPrice, category_id: categoryId, sort_order: Number(order) || 0, is_available: available, is_published: published, image_path: uploaded, archived_at: product?.archived_at ?? null })
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Gagal menyimpan produk.') }
+      uploaded = imageFile ? await uploadProductImage(imageFile) : null
+      await onSave({ ...(product ? { id: product.id } : {}), name: name.trim(), description: description.trim(), price: numericPrice, category_id: categoryId, sort_order: Number(order) || 0, is_available: available, is_published: published, image_path: uploaded ?? imagePath, archived_at: product?.archived_at ?? null })
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Gagal menyimpan produk.'
+      if (uploaded) {
+        try { await removeProductImage(uploaded) }
+        catch (cleanupError) {
+          const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : 'Terjadi kesalahan.'
+          setError(`${message} Foto baru juga gagal dibersihkan: ${cleanupMessage}`)
+          return
+        }
+      }
+      setError(message)
+    }
     finally { setBusy(false) }
   }
-  return <div className="modal-backdrop"><form className="admin-modal" onSubmit={submit}><div className="panel-heading"><div><span className="eyebrow red">{product ? 'PERBARUI KATALOG' : 'KATALOG BARU'}</span><h2>{product ? 'Edit produk' : 'Tambah produk'}</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Tutup"><X /></button></div><div className="admin-form-grid"><label>Nama produk<input required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} /></label><label>Harga (Rupiah)<input required type="number" min="0" step="1" value={price} onChange={(e) => setPrice(e.target.value)} /></label><label>Kategori<select required value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Urutan tampil<input type="number" step="1" value={order} onChange={(e) => setOrder(e.target.value)} /></label><label className="form-span">Deskripsi<textarea rows={3} maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} /></label><label className="upload-control form-span">Foto produk<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => { const file = e.target.files?.[0] ?? null; setImageFile(file); setPreview(file ? URL.createObjectURL(file) : (imagePath ? productImageUrl(imagePath) : null)) }} /><span>JPG, PNG, atau WebP. Pilih foto baru untuk mengganti gambar saat ini.</span>{preview && <img src={preview} alt="Pratinjau produk" />}</label><div className="toggle-row form-span"><label><input type="checkbox" checked={available} onChange={(e) => setAvailable(e.target.checked)} /> Tersedia</label><label><input type="checkbox" checked={published} onChange={(e) => setPublished(e.target.checked)} /> Tampilkan di menu publik</label></div></div>{error && <p role="alert" className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Batal</button><button className="primary-button" disabled={busy}>{busy ? 'Menyimpan...' : 'Simpan produk'}</button></div></form></div>
+  useEffect(() => () => { if (preview?.startsWith('blob:')) URL.revokeObjectURL(preview) }, [preview])
+  return <div className="modal-backdrop"><form className="admin-modal" onSubmit={submit}><div className="panel-heading"><div><span className="eyebrow red">{product ? 'PERBARUI KATALOG' : 'KATALOG BARU'}</span><h2>{product ? 'Edit produk' : 'Tambah produk'}</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Tutup"><X /></button></div><div className="admin-form-grid"><label>Nama produk<input required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} /></label><label>Harga (Rupiah)<input required type="number" min="0" step="1" value={price} onChange={(e) => setPrice(e.target.value)} /></label><label>Kategori<select required value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Urutan tampil<input type="number" step="1" value={order} onChange={(e) => setOrder(e.target.value)} /></label><label className="form-span">Deskripsi<textarea rows={3} maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} /></label><label className="upload-control form-span">Foto produk<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => { const file = e.target.files?.[0] ?? null; setImageFile(file); setPreview(file ? URL.createObjectURL(file) : (imagePath ? productImageUrl(imagePath) : product?.image_url ?? null)) }} /><span>JPG, PNG, atau WebP maksimal 5 MB. Gambar diperkecil sebelum diunggah.</span>{preview && <img src={preview} alt="Pratinjau produk" onError={() => setPreview(null)} />}</label><div className="toggle-row form-span"><label><input type="checkbox" checked={available} onChange={(e) => setAvailable(e.target.checked)} /> Tersedia</label><label><input type="checkbox" checked={published} onChange={(e) => setPublished(e.target.checked)} /> Tampilkan di menu publik</label></div></div>{error && <p role="alert" className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Batal</button><button className="primary-button" disabled={busy}>{busy ? 'Menyimpan...' : 'Simpan produk'}</button></div></form></div>
+}
+
+function AdminProductImage({ product }: { product: Product }) {
+  const [failed, setFailed] = useState(false)
+  const image = product.image_path ? productImageUrl(product.image_path) : product.image_url
+  return <div className="admin-product-image">{image && !failed ? <img src={image} alt="" onError={() => setFailed(true)} /> : <ImagePlus aria-hidden="true" />}</div>
 }
 
 function CategoriesPage({ data, reload, setNotice }: { data: AdminData; reload: () => Promise<void>; setNotice: (notice: Notice | null) => void }) {
@@ -283,7 +314,7 @@ function SettingsPage({ data, reload, setNotice }: { data: AdminData; reload: ()
     event.preventDefault()
     setError('')
     const phone = normalizeWhatsAppNumber(settings.whatsapp_number)
-    if (!/^62\d{8,13}$/.test(phone)) { setError('Nomor WhatsApp wajib valid dan menggunakan kode negara Indonesia 62, contoh: 6281234567890.'); return }
+    if (!isValidWhatsAppNumber(phone)) { setError('Nomor WhatsApp wajib valid dan menggunakan kode negara Indonesia 62, contoh: 6281234567890.'); return }
     if (!settings.takeaway_enabled && !settings.delivery_enabled) { setError('Aktifkan minimal satu jenis layanan pesanan.'); return }
     if (!Number.isSafeInteger(settings.delivery_fee) || settings.delivery_fee < 0) { setError('Biaya antar harus berupa angka Rupiah bulat dan tidak negatif.'); return }
     setBusy(true)

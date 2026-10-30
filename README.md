@@ -54,11 +54,12 @@ npm run build
 
 ### Impor lampiran SQL yang sudah ada
 
-[`menus_rows (1).sql`](./menus_rows%20(1).sql) adalah satu perintah `INSERT INTO public.menus` dengan 106 baris, bukan definisi tabel. Tabel `public.menus` harus sudah ada dengan kolom yang disebut pada `INSERT`.
+[`supabase/seed/legacy_menus_rows.sql`](./supabase/seed/legacy_menus_rows.sql) adalah satu perintah `INSERT INTO public.menus` dengan 106 baris, bukan definisi tabel. Tabel `public.menus` harus sudah ada dengan kolom yang disebut pada `INSERT`.
 
 - Bila tabel lama sudah ada, jalankan migration inti terlebih dahulu, pastikan tabel itu berisi data lampiran, lalu jalankan migration impor kedua.
 - Bila tabel itu belum ada, jalankan [`legacy_menus_table.sql`](./supabase/legacy_menus_table.sql) terlebih dahulu, jalankan lampiran SQL di SQL Editor, lalu jalankan kedua migration secara berurutan.
 - Bila migration impor sudah pernah dijalankan sebelum lampiran dimasukkan, jalankan ulang isi migration impor setelah data tersedia. Impor menggunakan `ON CONFLICT DO NOTHING`, sehingga aman dijalankan ulang dan tidak menghapus tabel sumber.
+- **Penting:** [`202610230002_import_legacy_menus.sql`](./supabase/migrations/202610230002_import_legacy_menus.sql) bergantung pada isi tabel `public.menus`. Jangan jalankan migration ini melalui `supabase db push` sebelum data legacy tersedia di tabel tersebut. Gunakan [`supabase/seed/import_legacy_menus.sql`](./supabase/seed/import_legacy_menus.sql) untuk impor yang lebih aman dengan pesan diagnostik dan urutan kategori dari data sumber.
 - Kategori dibuat dari nilai `display_category` (atau `category` sebagai fallback) pada data yang diberikan. Nama tersebut bukan daftar kategori yang ditebak atau dikunci di kode; admin dapat mengganti nama, urutan, dan visibilitas, serta menambah kategori. Jumlah kategori di database fleksibel sehingga 13 kategori dapat dikelola tanpa perubahan source code.
 - Produk `active = false` diimpor tidak tersedia dan tidak dipublikasikan. Harga sumber harus berupa bilangan Rupiah bulat. URL gambar eksternal yang sudah ada dipertahankan; gambar baru dikelola melalui Storage.
 
@@ -129,3 +130,15 @@ Tidak ada tabel pesanan, transaksi, pembayaran, atau penjualan.
 - **Kategori/produk tidak tampil:** pastikan kategori aktif, produk dipublikasikan, dan produk tidak diarsipkan.
 - Jangan menaruh service-role key di frontend. RLS adalah lapisan otorisasi, bukan sekadar kontrol tampilan.
 - Uji akses publik dengan publishable/anon key hanya untuk query baca yang memang diperlukan katalog; jangan menggunakan service-role key di frontend.
+
+## Checklist dashboard Supabase
+
+Kerjakan langkah-langkah ini secara manual di dashboard Supabase setelah setup awal. Kode tidak dapat menggantikannya.
+
+- [ ] **Matikan pendaftaran publik:** di **Authentication → Providers → Email**, nonaktifkan "Enable Email Signup" agar tidak ada yang bisa mendaftar sendiri sebagai admin.
+- [ ] **Atur Site URL dan Redirect URLs:** di **Authentication → URL Configuration**, set Site URL ke URL GitHub Pages (misalnya `https://mfxnan.github.io/menus/`) dan tambahkan URL yang sama ke Redirect URLs.
+- [ ] **Periksa backup:** di **Database → Backups**, pastikan backup otomatis aktif sebelum menjalankan migration atau perubahan skema.
+- [ ] **Jalankan security check:** jalankan [`supabase/checks/verify_security.sql`](./supabase/checks/verify_security.sql) di SQL Editor dan periksa hasilnya — pastikan semua tabel publik memiliki RLS aktif, terutama `public.menus` (tabel legacy).
+- [ ] **Periksa Security Advisor:** di **Database → Security Advisor**, tinjau semua peringatan yang muncul dan tindak lanjuti yang relevan.
+- [ ] **Pastikan RLS aktif di `public.menus`:** tabel ini dibuat oleh [`supabase/legacy_menus_table.sql`](./supabase/legacy_menus_table.sql) dengan RLS aktif; verifikasi tidak ada policy yang memperbolehkan akses tak terbatas.
+- [ ] **Hapus tabel legacy hanya setelah impor terverifikasi:** jangan hapus `public.menus` sebelum: (1) impor produk terverifikasi lengkap di tabel `products`, (2) backup database dibuat, dan (3) aplikasi sudah berjalan normal dari data baru.
