@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, Route, Routes } from 'react-router-dom'
 import { ArrowRight, Clock3, MapPin, Menu as MenuIcon, Minus, Plus, Search, ShoppingBag, Trash2, X } from 'lucide-react'
-import { Admin } from './Admin'
 import { getCatalog, getStoreSettings } from './lib/data'
 import { cartCount, cartTotal, loadCart, saveCart, setQuantity, validCartItems } from './lib/cart'
+import { filterProducts } from './lib/catalog'
 import { formatIDR } from './lib/money'
 import { buildWhatsAppMessage, buildWhatsAppUrl } from './lib/whatsapp'
 import { validateCheckout } from './lib/validation'
@@ -13,6 +13,7 @@ import type { CartItem, Category, CheckoutDetails, Product, StoreSettings } from
 import { defaultSettings } from './types'
 
 const initialDetails: CheckoutDetails = { customerName: '', customerPhone: '', orderType: 'takeaway', address: '', notes: '' }
+const Admin = lazy(() => import('./Admin').then(({ Admin: admin }) => ({ default: admin })))
 
 function storeInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'RC'
@@ -54,9 +55,32 @@ export function App() {
 
   useEffect(() => {
     void refreshCatalog()
-    const refresh = () => { void refreshCatalog() }
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void refreshCatalog()
+    }
+    let poll: number | undefined
+    const startPolling = () => {
+      if (document.visibilityState === 'visible' && poll === undefined) {
+        poll = window.setInterval(refresh, 60_000)
+      }
+    }
+    const stopPolling = () => {
+      if (poll !== undefined) {
+        window.clearInterval(poll)
+        poll = undefined
+      }
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refresh()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
     window.addEventListener('focus', refresh)
-    const poll = window.setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    startPolling()
     const channel = supabase?.channel('public-menu-catalog')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, refresh)
@@ -64,7 +88,8 @@ export function App() {
       .subscribe()
     return () => {
       window.removeEventListener('focus', refresh)
-      window.clearInterval(poll)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      stopPolling()
       if (channel) void supabase?.removeChannel(channel)
     }
   }, [refreshCatalog])
@@ -76,12 +101,7 @@ export function App() {
   }, [settings.branch_name, settings.store_name])
 
   const filteredProducts = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase('id-ID')
-    return products.filter((product) => {
-      const matchesCategory = categoryId === 'all' || product.category_id === categoryId
-      const matchesQuery = !query || `${product.name} ${product.description}`.toLocaleLowerCase('id-ID').includes(query)
-      return matchesCategory && matchesQuery
-    })
+    return filterProducts(products, categoryId, search)
   }, [categoryId, products, search])
   const count = cartCount(cart)
   const subtotal = cartTotal(cart, products)
@@ -161,7 +181,7 @@ export function App() {
 
   return (
     <Routes>
-      <Route path="/admin/*" element={<Admin />} />
+      <Route path="/admin/*" element={<Suspense fallback={<div className="admin-loading"><span className="spinner" /><p>Memuat panel administrator...</p></div>}><Admin /></Suspense>} />
       <Route path="*" element={<>
         <header className="site-header">
           <a className="brand" href="#/"><span className="brand-mark">{storeInitials(settings.store_name)}</span><span><strong>{settings.store_name}</strong><small>{settings.branch_name}</small></span></a>
